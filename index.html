@@ -171,7 +171,8 @@
         let groupC_facets = [10,11,12,13,14,15,16,17,18,19];
         let mesh, controls, scene, camera, renderer;
         let time = 0;
-        const flowSpeed = 2.8;          // lower = smoother/slower wave, higher = faster pulse
+        let streamlines = [];
+        let wakeTime = 0;
 
         function initThreeJS() {
             scene = new THREE.Scene();
@@ -293,7 +294,7 @@
 
                 const direction = new THREE.Vector3().subVectors(pJ, pI).normalize();
 
-                const extension = 2.0; // longer continuous tracers
+                const extension = 1.8;
                 const extendStart = direction.clone().multiplyScalar(-extension);
                 const extendEnd   = direction.clone().multiplyScalar(extension);
 
@@ -302,57 +303,65 @@
 
                 const lineGeo = new THREE.BufferGeometry().setFromPoints([start, end]);
 
-                // Vertex colors for animated flow
-                const positions = new Float32Array([
-                    start.x, start.y, start.z,
-                    end.x,   end.y,   end.z
-                ]);
-
-                const colors = new Float32Array(6); // 2 vertices × 3 (RGB)
-
-                lineGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-                lineGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
                 const lineMat = new THREE.LineBasicMaterial({
-                    vertexColors: true,
+                    color: magnitude > 1.2 ? 0xff88ff : 0x00ffff,
                     transparent: true,
-                    opacity: 0.85 + magnitude * 0.1,
+                    opacity: Math.min(0.95, magnitude * 0.35 + 0.4),
                     linewidth: 1.5
                 });
 
                 const line = new THREE.Line(lineGeo, lineMat);
                 line.userData.isTension = true;
-                line.userData.magnitude = magnitude;
                 scene.add(line);
             });
         }
 
-        function animateTensionFlow() {
-            time += 0.016;
+        function createStreamlines() {
+            // Remove old streamlines
+            streamlines.forEach(s => scene.remove(s));
+            streamlines = [];
 
-            scene.children.forEach(child => {
-                if (child.isLine && child.userData.isTension) {
-                    const mag = child.userData.magnitude || 1;
-                    const phase = time * flowSpeed + mag * 2; // slight offset per line
+            const numLines = 28;
+            const radius = 5.0;
+            const segments = 80;
 
-                    const colors = child.geometry.attributes.color.array;
+            for (let i = 0; i < numLines; i++) {
+                const angle = (i / numLines) * Math.PI * 2 + time * 0.1;
+                const start = new THREE.Vector3(
+                    Math.cos(angle) * radius,
+                    Math.sin(angle) * radius * 0.4,
+                    -10
+                );
 
-                    // Wave from start to end
-                    const t = (Math.sin(phase) * 0.5 + 0.5); // 0 → 1 pulse
+                const points = [];
+                let current = start.clone();
 
-                    // Cyan → bright white → cyan
-                    const baseColor = new THREE.Color(0x00ffff);
-                    const peakColor = new THREE.Color(0xffffff);
+                for (let s = 0; s < segments; s++) {
+                    const t = s / (segments - 1);
+                    const bend = Math.sin(t * Math.PI * 4 + time * 1.2) * 0.6 * (1 - t * 0.7);
+                    current.x += 0.25 + bend * Math.cos(angle);
+                    current.y += bend * 0.3;
+                    current.z += 0.35;
 
-                    const color = baseColor.clone().lerp(peakColor, t * 0.7);
+                    const toCenter = mesh.position.clone().sub(current).normalize().multiplyScalar(0.18 * (1 - t));
+                    current.add(toCenter);
 
-                    // Apply gradient along line
-                    colors[0] = color.r * 0.6; colors[1] = color.g * 0.6; colors[2] = color.b * 0.6; // dim start
-                    colors[3] = color.r;       colors[4] = color.g;       colors[5] = color.b;       // bright middle/end
-
-                    child.geometry.attributes.color.needsUpdate = true;
+                    points.push(current.clone());
                 }
-            });
+
+                const geo = new THREE.BufferGeometry().setFromPoints(points);
+                const mat = new THREE.LineBasicMaterial({
+                    color: 0x88ffff,
+                    transparent: true,
+                    opacity: 0.4 + 0.15 * Math.sin(time * 3 + i * 2),
+                    linewidth: 1.2
+                });
+
+                const line = new THREE.Line(geo, mat);
+                line.userData.isStreamline = true;
+                scene.add(line);
+                streamlines.push(line);
+            }
         }
 
         function updateState() {
@@ -407,21 +416,35 @@
         function animate() {
             requestAnimationFrame(animate);
 
+            time += 0.016;
+
             if (mesh) {
                 mesh.rotation.y += rotationSpeed * 0.018;
 
                 const factor = Math.min(rotationSpeed / 10, 1);
                 if (factor > 0.7) {
-                    const pulse = Math.sin(Date.now() * 0.015) * 0.1 * factor;
+                    const pulse = Math.sin(time * 20) * 0.08 * factor;
                     mesh.scale.set(1 + pulse, 1 + pulse, 1 + pulse);
                 } else {
                     mesh.scale.setScalar(1);
                 }
             }
 
-            // Animate color flow on tension lines
-            if (document.querySelector('input[name="mode"]:checked')?.value === 'tension') {
-                animateTensionFlow();
+            // Fluid dynamics visualization (streamlines + wake) in envelope or high speed
+            const currentMode = document.querySelector('input[name="mode"]:checked')?.value;
+            if (rotationSpeed >= 4 || currentMode === 'envelope') {
+                wakeTime += 0.016;
+                if (wakeTime > 3 || streamlines.length === 0) {
+                    createStreamlines();
+                    wakeTime = 0;
+                }
+                // Gentle pulse on opacity for flow feel
+                streamlines.forEach((line, idx) => {
+                    line.material.opacity = 0.35 + 0.15 * Math.sin(time * 4 + idx * 1.5);
+                });
+            } else {
+                streamlines.forEach(s => scene.remove(s));
+                streamlines = [];
             }
 
             controls.update();
@@ -442,3 +465,4 @@
     </script>
 </body>
 </html>
+    </script>
