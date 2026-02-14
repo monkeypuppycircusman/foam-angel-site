@@ -171,16 +171,7 @@
         let groupC_facets = [10,11,12,13,14,15,16,17,18,19];
         let mesh, controls, scene, camera, renderer;
         let time = 0;
-        const flowSpeed = 2.8;
-        let particleTexture;
-
-        // Particle flow settings
-        const particlesPerLine = 12;
-        const particleSpeed = 1.8;
-        const particleSize = 0.18;      // larger for softer glow
-        const particleOpacity = 0.85;
-
-        let tensionParticles = [];
+        const flowSpeed = 2.8;          // lower = smoother/slower wave, higher = faster pulse
 
         function initThreeJS() {
             scene = new THREE.Scene();
@@ -193,10 +184,6 @@
                 texture.mapping = THREE.EquirectangularReflectionMapping;
                 scene.background = texture;
             });
-
-            // Load circular glow texture for particles
-            particleTexture = loader.load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/sprites/circle.png');
-            particleTexture.colorSpace = THREE.SRGBColorSpace;
 
             const starsGeometry = new THREE.BufferGeometry();
             const starsCount = 4000;
@@ -291,13 +278,11 @@
         }
 
         function updateTensionLines() {
-            // Clean up old lines + particles
             scene.children.forEach(child => {
-                if ((child.isLine && child.userData.isTension) || child.userData.isTensionParticles) {
+                if (child.isLine && child.userData.isTension) {
                     scene.remove(child);
                 }
             });
-            tensionParticles = [];
 
             Object.entries(tensionGraph).forEach(([key, {magnitude}]) => {
                 const [i, j] = key.split('-').map(Number);
@@ -308,86 +293,65 @@
 
                 const direction = new THREE.Vector3().subVectors(pJ, pI).normalize();
 
-                const extension = 2.0;
+                const extension = 2.0; // longer continuous tracers
                 const extendStart = direction.clone().multiplyScalar(-extension);
                 const extendEnd   = direction.clone().multiplyScalar(extension);
 
                 const start = pI.clone().add(extendStart);
                 const end   = pJ.clone().add(extendEnd);
 
-                // Faint solid guide line
                 const lineGeo = new THREE.BufferGeometry().setFromPoints([start, end]);
+
+                // Vertex colors for animated flow
+                const positions = new Float32Array([
+                    start.x, start.y, start.z,
+                    end.x,   end.y,   end.z
+                ]);
+
+                const colors = new Float32Array(6); // 2 vertices × 3 (RGB)
+
+                lineGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                lineGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
                 const lineMat = new THREE.LineBasicMaterial({
-                    color: 0x004444,
+                    vertexColors: true,
                     transparent: true,
-                    opacity: 0.25
-                });
-                const baseLine = new THREE.Line(lineGeo, lineMat);
-                baseLine.userData.isTension = true;
-                scene.add(baseLine);
-
-                // Particle flow
-                const particleGeo = new THREE.BufferGeometry();
-                const particlePos = new Float32Array(particlesPerLine * 3);
-
-                for (let k = 0; k < particlesPerLine; k++) {
-                    const t = k / (particlesPerLine - 1);
-                    const point = start.clone().lerp(end, t);
-                    particlePos[k*3]     = point.x;
-                    particlePos[k*3 + 1] = point.y;
-                    particlePos[k*3 + 2] = point.z;
-                }
-
-                particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePos, 3));
-
-                const particleMat = new THREE.PointsMaterial({
-                    map: particleTexture,
-                    color: 0x88ffff,
-                    size: particleSize,
-                    transparent: true,
-                    opacity: particleOpacity,
-                    blending: THREE.AdditiveBlending,
-                    depthWrite: false,
-                    sizeAttenuation: true,
-                    alphaTest: 0.05
+                    opacity: 0.85 + magnitude * 0.1,
+                    linewidth: 1.5
                 });
 
-                const particles = new THREE.Points(particleGeo, particleMat);
-                particles.userData.isTensionParticles = true;
-                particles.userData.start = start.clone();
-                particles.userData.end = end.clone();
-                particles.userData.length = start.distanceTo(end);
-                particles.userData.offsets = new Float32Array(particlesPerLine);
-
-                for (let k = 0; k < particlesPerLine; k++) {
-                    particles.userData.offsets[k] = Math.random();
-                }
-
-                scene.add(particles);
-                tensionParticles.push(particles);
+                const line = new THREE.Line(lineGeo, lineMat);
+                line.userData.isTension = true;
+                line.userData.magnitude = magnitude;
+                scene.add(line);
             });
         }
 
-        function animateParticleFlow() {
+        function animateTensionFlow() {
             time += 0.016;
 
-            tensionParticles.forEach(pGroup => {
-                const positions = pGroup.geometry.attributes.position.array;
-                const offsets = pGroup.userData.offsets;
+            scene.children.forEach(child => {
+                if (child.isLine && child.userData.isTension) {
+                    const mag = child.userData.magnitude || 1;
+                    const phase = time * flowSpeed + mag * 2; // slight offset per line
 
-                for (let k = 0; k < particlesPerLine; k++) {
-                    offsets[k] += particleSpeed * 0.016 / pGroup.userData.length;
-                    if (offsets[k] > 1) offsets[k] -= 1;
+                    const colors = child.geometry.attributes.color.array;
 
-                    const t = offsets[k];
-                    const point = pGroup.userData.start.clone().lerp(pGroup.userData.end, t);
+                    // Wave from start to end
+                    const t = (Math.sin(phase) * 0.5 + 0.5); // 0 → 1 pulse
 
-                    positions[k*3]     = point.x;
-                    positions[k*3 + 1] = point.y;
-                    positions[k*3 + 2] = point.z;
+                    // Cyan → bright white → cyan
+                    const baseColor = new THREE.Color(0x00ffff);
+                    const peakColor = new THREE.Color(0xffffff);
+
+                    const color = baseColor.clone().lerp(peakColor, t * 0.7);
+
+                    // Apply gradient along line
+                    colors[0] = color.r * 0.6; colors[1] = color.g * 0.6; colors[2] = color.b * 0.6; // dim start
+                    colors[3] = color.r;       colors[4] = color.g;       colors[5] = color.b;       // bright middle/end
+
+                    child.geometry.attributes.color.needsUpdate = true;
                 }
-
-                pGroup.geometry.attributes.position.needsUpdate = true;
             });
         }
 
@@ -405,11 +369,8 @@
                 updateTensionLines();
             } else {
                 scene.children.forEach(child => {
-                    if (child.isLine && child.userData.isTension || child.userData.isTensionParticles) {
-                        scene.remove(child);
-                    }
+                    if (child.isLine && child.userData.isTension) scene.remove(child);
                 });
-                tensionParticles = [];
             }
         }
 
@@ -458,8 +419,9 @@
                 }
             }
 
+            // Animate color flow on tension lines
             if (document.querySelector('input[name="mode"]:checked')?.value === 'tension') {
-                animateParticleFlow();
+                animateTensionFlow();
             }
 
             controls.update();
@@ -477,9 +439,6 @@
         }
 
         window.onload = main;
-    </script>
-</body>
-</html>
     </script>
 </body>
 </html>
