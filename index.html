@@ -99,14 +99,6 @@
             width: 100%;
             height: 100%;
         }
-
-        .info-section {
-            margin-bottom: 20px;
-        }
-        .info-section h4 {
-            color: #0f3460;
-            margin-bottom: 8px;
-        }
     </style>
 </head>
 <body>
@@ -161,9 +153,6 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.min.js"></script>
 
     <script>
-        // ── Paste your full working JavaScript here (from previous versions) ──
-        // For completeness, here's the minimal structure again — replace with your latest script logic
-
         const FACET_COUNT = 20;
         let stiffnessValues = new Array(FACET_COUNT).fill(1.0);
         let couplingMatrix = [];
@@ -181,11 +170,10 @@
 
             camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
             renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('simulationCanvas'), antialias: true });
-            renderer.setSize(window.innerWidth - 280, window.innerHeight - 120); // approx header height
             renderer.setPixelRatio(window.devicePixelRatio);
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-            const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
             dirLight.position.set(5, 8, 5);
             scene.add(dirLight);
 
@@ -193,17 +181,17 @@
             controls.enableDamping = true;
             controls.dampingFactor = 0.05;
             controls.minDistance = 2;
-            controls.maxDistance = 10;
+            controls.maxDistance = 12;
 
-            camera.position.set(0, 0, 5);
+            camera.position.set(0, 1, 6);
 
-            const geometry = new THREE.IcosahedronGeometry(1.8, 1);
+            const geometry = new THREE.IcosahedronGeometry(2.2, 1); // bigger for better visibility
             geometry.computeVertexNormals();
 
             const material = new THREE.MeshStandardMaterial({
                 vertexColors: true,
-                metalness: 0.1,
-                roughness: 0.7
+                metalness: 0.2,
+                roughness: 0.6
             });
 
             mesh = new THREE.Mesh(geometry, material);
@@ -220,36 +208,124 @@
             const colors = [];
             values.forEach(val => {
                 const norm = (val - minVal) / range;
-                const hue = 0.6 - (norm * 0.6);
-                const color = new THREE.Color().setHSL(hue, 1.0, 0.5);
+                const hue = 0.66 - (norm * 0.66); // cyan-ish to magenta/red
+                const color = new THREE.Color().setHSL(hue, 0.9, 0.55);
                 colors.push(color.r, color.g, color.b);
             });
 
             mesh.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
         }
 
-        // Add your other functions here: initializeStiffnessAndCoupling, computeEigenvalues, stiffenGroup,
-        // applyPerturbation, updateTensionLines, updateState, initUIListeners, animate, etc.
-        // (copy from your previous working version)
+        function initializeStiffnessAndCoupling() {
+            couplingMatrix = Array(FACET_COUNT).fill().map(() => Array(FACET_COUNT).fill(0));
+            for (let i = 0; i < FACET_COUNT; i++) {
+                for (let j = i + 1; j < FACET_COUNT; j++) {
+                    if (Math.abs(i - j) <= 4 || Math.abs(i - j) >= FACET_COUNT - 4) {
+                        couplingMatrix[i][j] = couplingMatrix[j][i] = 0.35;
+                    }
+                }
+            }
+        }
 
-        // Example resize handler
+        function computeEigenvalues() {
+            return stiffnessValues.map((s, i) => s + couplingMatrix[i].reduce((a, b) => a + b, 0) * 0.6);
+        }
+
+        function stiffenGroup(groupId, amount = 0.5) {
+            const group = groupId === 'A' ? groupA_facets : groupId === 'B' ? groupB_facets : groupC_facets;
+            group.forEach(i => {
+                stiffnessValues[i] = Math.min(4.0, stiffnessValues[i] + amount);
+            });
+        }
+
+        function applyPerturbation() {
+            stiffnessValues = stiffnessValues.map(v => Math.max(0.4, Math.min(4.0, v + (Math.random() - 0.5) * 0.8)));
+            updateState();
+        }
+
+        function updateTensionLines() {
+            scene.children.forEach(child => {
+                if (child.isLine && child.userData.isTension) scene.remove(child);
+            });
+
+            Object.entries(tensionGraph).forEach(([key, {magnitude}]) => {
+                const [i, j] = key.split('-').map(Number);
+                const pos = mesh.geometry.attributes.position.array;
+                const p1 = new THREE.Vector3(pos[i*3], pos[i*3+1], pos[i*3+2]);
+                const p2 = new THREE.Vector3(pos[j*3], pos[j*3+1], pos[j*3+2]);
+
+                const lineGeo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+                const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: Math.min(1, magnitude * 0.5) });
+                const line = new THREE.Line(lineGeo, lineMat);
+                line.userData.isTension = true;
+                scene.add(line);
+            });
+        }
+
+        function updateState() {
+            const ev = computeEigenvalues();
+            updateFacetColors(ev);
+
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            if (mode === 'tension') {
+                tensionGraph = {};
+                for (let i = 0; i < FACET_COUNT; i += 2) {
+                    const j = (i + 5) % FACET_COUNT;
+                    tensionGraph[`${i}-${j}`] = { magnitude: Math.abs(ev[i] - ev[j]) };
+                }
+                updateTensionLines();
+            } else {
+                scene.children.forEach(child => {
+                    if (child.isLine && child.userData.isTension) scene.remove(child);
+                });
+            }
+        }
+
+        function initUIListeners() {
+            document.getElementById('rotationSlider').addEventListener('input', e => {
+                rotationSpeed = +e.target.value;
+                document.getElementById('rotationValue').textContent = rotationSpeed.toFixed(1);
+            });
+
+            document.getElementById('perturbBtn').addEventListener('click', applyPerturbation);
+
+            ['A','B','C'].forEach(id => {
+                document.getElementById(`stiffen${id}`).addEventListener('change', e => {
+                    if (e.target.checked) stiffenGroup(id);
+                    else stiffnessValues = new Array(FACET_COUNT).fill(1.0);
+                    updateState();
+                });
+            });
+
+            document.querySelectorAll('input[name="mode"]').forEach(r => {
+                r.addEventListener('change', updateState);
+            });
+        }
+
         function onResize() {
+            const headerHeight = document.getElementById('top-header').offsetHeight || 100;
             const w = window.innerWidth - 280;
-            const h = window.innerHeight - document.getElementById('top-header').offsetHeight;
+            const h = window.innerHeight - headerHeight;
             renderer.setSize(w, h);
             camera.aspect = w / h;
             camera.updateProjectionMatrix();
         }
 
-        window.addEventListener('resize', onResize);
+        function animate() {
+            requestAnimationFrame(animate);
+            if (mesh) mesh.rotation.y += rotationSpeed * 0.004;
+            controls.update();
+            renderer.render(scene, camera);
+        }
 
         function main() {
-            initializeStiffnessAndCoupling(); // your function
+            initializeStiffnessAndCoupling();
             initThreeJS();
-            initUIListeners(); // your function
-            updateState();     // your function
-            animate();         // your function
+            initUIListeners();
+            updateState();
+            animate();
             onResize();
+            window.addEventListener('resize', onResize);
         }
 
         window.onload = main;
