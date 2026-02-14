@@ -171,7 +171,16 @@
         let groupC_facets = [10,11,12,13,14,15,16,17,18,19];
         let mesh, controls, scene, camera, renderer;
         let time = 0;
-        const flowSpeed = 2.8;          // lower = smoother/slower wave, higher = faster pulse
+        const flowSpeed = 2.8;
+
+        // Particle flow settings
+        const particlesPerLine = 12;       // more = denser flow, but higher cost
+        const particleSpeed = 1.8;         // units per second along line
+        const particleSize = 0.12;
+        const particleOpacity = 0.9;
+        const particleColor = new THREE.Color(0x88ffff);
+
+        let tensionParticles = []; // array of {group: THREE.Points, positions: Float32Array, ...}
 
         function initThreeJS() {
             scene = new THREE.Scene();
@@ -278,11 +287,13 @@
         }
 
         function updateTensionLines() {
+            // Clean up old lines + particles
             scene.children.forEach(child => {
-                if (child.isLine && child.userData.isTension) {
+                if ((child.isLine && child.userData.isTension) || child.userData.isTensionParticles) {
                     scene.remove(child);
                 }
             });
+            tensionParticles = [];
 
             Object.entries(tensionGraph).forEach(([key, {magnitude}]) => {
                 const [i, j] = key.split('-').map(Number);
@@ -292,66 +303,91 @@
                 const pJ = new THREE.Vector3(pos[j*3], pos[j*3+1], pos[j*3+2]);
 
                 const direction = new THREE.Vector3().subVectors(pJ, pI).normalize();
+                const lineLength = pI.distanceTo(pJ) + 4.0; // extra for extensions
 
-                const extension = 2.0; // longer continuous tracers
+                const extension = 2.0;
                 const extendStart = direction.clone().multiplyScalar(-extension);
                 const extendEnd   = direction.clone().multiplyScalar(extension);
 
                 const start = pI.clone().add(extendStart);
                 const end   = pJ.clone().add(extendEnd);
 
+                // Solid base line (faint for context)
                 const lineGeo = new THREE.BufferGeometry().setFromPoints([start, end]);
-
-                // Vertex colors for animated flow
-                const positions = new Float32Array([
-                    start.x, start.y, start.z,
-                    end.x,   end.y,   end.z
-                ]);
-
-                const colors = new Float32Array(6); // 2 vertices × 3 (RGB)
-
-                lineGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-                lineGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
                 const lineMat = new THREE.LineBasicMaterial({
-                    vertexColors: true,
+                    color: 0x004444,
                     transparent: true,
-                    opacity: 0.85 + magnitude * 0.1,
-                    linewidth: 1.5
+                    opacity: 0.25
+                });
+                const baseLine = new THREE.Line(lineGeo, lineMat);
+                baseLine.userData.isTension = true;
+                scene.add(baseLine);
+
+                // Particle flow group
+                const particleGeo = new THREE.BufferGeometry();
+                const particlePos = new Float32Array(particlesPerLine * 3);
+                const particleSizes = new Float32Array(particlesPerLine);
+
+                for (let k = 0; k < particlesPerLine; k++) {
+                    const t = k / (particlesPerLine - 1);
+                    const point = start.clone().lerp(end, t);
+                    particlePos[k*3]     = point.x;
+                    particlePos[k*3 + 1] = point.y;
+                    particlePos[k*3 + 2] = point.z;
+                    particleSizes[k] = particleSize * (0.6 + Math.random() * 0.8);
+                }
+
+                particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePos, 3));
+                particleGeo.setAttribute('size', new THREE.BufferAttribute(particleSizes, 1));
+
+                const particleMat = new THREE.PointsMaterial({
+                    color: particleColor,
+                    size: particleSize,
+                    transparent: true,
+                    opacity: particleOpacity,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false,
+                    sizeAttenuation: true
                 });
 
-                const line = new THREE.Line(lineGeo, lineMat);
-                line.userData.isTension = true;
-                line.userData.magnitude = magnitude;
-                scene.add(line);
+                const particles = new THREE.Points(particleGeo, particleMat);
+                particles.userData.isTensionParticles = true;
+                particles.userData.start = start.clone();
+                particles.userData.end = end.clone();
+                particles.userData.direction = direction.clone();
+                particles.userData.length = lineLength;
+                particles.userData.offsets = new Float32Array(particlesPerLine); // per-particle progress 0-1
+
+                // Random initial offsets so they don't all move in sync
+                for (let k = 0; k < particlesPerLine; k++) {
+                    particles.userData.offsets[k] = Math.random();
+                }
+
+                scene.add(particles);
+                tensionParticles.push(particles);
             });
         }
 
-        function animateTensionFlow() {
+        function animateParticleFlow() {
             time += 0.016;
 
-            scene.children.forEach(child => {
-                if (child.isLine && child.userData.isTension) {
-                    const mag = child.userData.magnitude || 1;
-                    const phase = time * flowSpeed + mag * 2; // slight offset per line
+            tensionParticles.forEach(pGroup => {
+                const positions = pGroup.geometry.attributes.position.array;
+                const offsets = pGroup.userData.offsets;
 
-                    const colors = child.geometry.attributes.color.array;
+                for (let k = 0; k < particlesPerLine; k++) {
+                    offsets[k] += particleSpeed * 0.016 / pGroup.userData.length;
+                    if (offsets[k] > 1) offsets[k] -= 1;
 
-                    // Wave from start to end
-                    const t = (Math.sin(phase) * 0.5 + 0.5); // 0 → 1 pulse
+                    const t = offsets[k];
+                    const point = pGroup.userData.start.clone().lerp(pGroup.userData.end, t);
 
-                    // Cyan → bright white → cyan
-                    const baseColor = new THREE.Color(0x00ffff);
-                    const peakColor = new THREE.Color(0xffffff);
-
-                    const color = baseColor.clone().lerp(peakColor, t * 0.7);
-
-                    // Apply gradient along line
-                    colors[0] = color.r * 0.6; colors[1] = color.g * 0.6; colors[2] = color.b * 0.6; // dim start
-                    colors[3] = color.r;       colors[4] = color.g;       colors[5] = color.b;       // bright middle/end
-
-                    child.geometry.attributes.color.needsUpdate = true;
+                    positions[k*3]     = point.x;
+                    positions[k*3 + 1] = point.y;
+                    positions[k*3 + 2] = point.z;
                 }
+
+                pGroup.geometry.attributes.position.needsUpdate = true;
             });
         }
 
@@ -369,8 +405,11 @@
                 updateTensionLines();
             } else {
                 scene.children.forEach(child => {
-                    if (child.isLine && child.userData.isTension) scene.remove(child);
+                    if (child.isLine && child.userData.isTension || child.userData.isTensionParticles) {
+                        scene.remove(child);
+                    }
                 });
+                tensionParticles = [];
             }
         }
 
@@ -419,9 +458,9 @@
                 }
             }
 
-            // Animate color flow on tension lines
+            // Particle flow animation
             if (document.querySelector('input[name="mode"]:checked')?.value === 'tension') {
-                animateTensionFlow();
+                animateParticleFlow();
             }
 
             controls.update();
