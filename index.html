@@ -172,15 +172,15 @@
         let mesh, controls, scene, camera, renderer;
         let time = 0;
         const flowSpeed = 2.8;
+        let particleTexture;
 
         // Particle flow settings
-        const particlesPerLine = 12;       // more = denser flow, but higher cost
-        const particleSpeed = 1.8;         // units per second along line
-        const particleSize = 0.12;
-        const particleOpacity = 0.9;
-        const particleColor = new THREE.Color(0x88ffff);
+        const particlesPerLine = 12;
+        const particleSpeed = 1.8;
+        const particleSize = 0.18;      // larger for softer glow
+        const particleOpacity = 0.85;
 
-        let tensionParticles = []; // array of {group: THREE.Points, positions: Float32Array, ...}
+        let tensionParticles = [];
 
         function initThreeJS() {
             scene = new THREE.Scene();
@@ -193,6 +193,10 @@
                 texture.mapping = THREE.EquirectangularReflectionMapping;
                 scene.background = texture;
             });
+
+            // Load circular glow texture for particles
+            particleTexture = loader.load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/sprites/circle.png');
+            particleTexture.colorSpace = THREE.SRGBColorSpace;
 
             const starsGeometry = new THREE.BufferGeometry();
             const starsCount = 4000;
@@ -303,7 +307,6 @@
                 const pJ = new THREE.Vector3(pos[j*3], pos[j*3+1], pos[j*3+2]);
 
                 const direction = new THREE.Vector3().subVectors(pJ, pI).normalize();
-                const lineLength = pI.distanceTo(pJ) + 4.0; // extra for extensions
 
                 const extension = 2.0;
                 const extendStart = direction.clone().multiplyScalar(-extension);
@@ -312,7 +315,7 @@
                 const start = pI.clone().add(extendStart);
                 const end   = pJ.clone().add(extendEnd);
 
-                // Solid base line (faint for context)
+                // Faint solid guide line
                 const lineGeo = new THREE.BufferGeometry().setFromPoints([start, end]);
                 const lineMat = new THREE.LineBasicMaterial({
                     color: 0x004444,
@@ -323,10 +326,9 @@
                 baseLine.userData.isTension = true;
                 scene.add(baseLine);
 
-                // Particle flow group
+                // Particle flow
                 const particleGeo = new THREE.BufferGeometry();
                 const particlePos = new Float32Array(particlesPerLine * 3);
-                const particleSizes = new Float32Array(particlesPerLine);
 
                 for (let k = 0; k < particlesPerLine; k++) {
                     const t = k / (particlesPerLine - 1);
@@ -334,31 +336,29 @@
                     particlePos[k*3]     = point.x;
                     particlePos[k*3 + 1] = point.y;
                     particlePos[k*3 + 2] = point.z;
-                    particleSizes[k] = particleSize * (0.6 + Math.random() * 0.8);
                 }
 
                 particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePos, 3));
-                particleGeo.setAttribute('size', new THREE.BufferAttribute(particleSizes, 1));
 
                 const particleMat = new THREE.PointsMaterial({
-                    color: particleColor,
+                    map: particleTexture,
+                    color: 0x88ffff,
                     size: particleSize,
                     transparent: true,
                     opacity: particleOpacity,
                     blending: THREE.AdditiveBlending,
                     depthWrite: false,
-                    sizeAttenuation: true
+                    sizeAttenuation: true,
+                    alphaTest: 0.05
                 });
 
                 const particles = new THREE.Points(particleGeo, particleMat);
                 particles.userData.isTensionParticles = true;
                 particles.userData.start = start.clone();
                 particles.userData.end = end.clone();
-                particles.userData.direction = direction.clone();
-                particles.userData.length = lineLength;
-                particles.userData.offsets = new Float32Array(particlesPerLine); // per-particle progress 0-1
+                particles.userData.length = start.distanceTo(end);
+                particles.userData.offsets = new Float32Array(particlesPerLine);
 
-                // Random initial offsets so they don't all move in sync
                 for (let k = 0; k < particlesPerLine; k++) {
                     particles.userData.offsets[k] = Math.random();
                 }
@@ -458,7 +458,6 @@
                 }
             }
 
-            // Particle flow animation
             if (document.querySelector('input[name="mode"]:checked')?.value === 'tension') {
                 animateParticleFlow();
             }
@@ -478,6 +477,9 @@
         }
 
         window.onload = main;
+    </script>
+</body>
+</html>
     </script>
 </body>
 </html>
