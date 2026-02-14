@@ -171,7 +171,7 @@
         let groupC_facets = [10,11,12,13,14,15,16,17,18,19];
         let mesh, controls, scene, camera, renderer;
         let time = 0;
-        const flowSpeed = 4.5;          // tune flow speed (higher = faster dashes movement)
+        const flowSpeed = 2.8;          // lower = smoother/slower wave, higher = faster pulse
 
         function initThreeJS() {
             scene = new THREE.Scene();
@@ -293,29 +293,65 @@
 
                 const direction = new THREE.Vector3().subVectors(pJ, pI).normalize();
 
-                const extension = 1.8;
+                const extension = 2.0; // longer continuous tracers
                 const extendStart = direction.clone().multiplyScalar(-extension);
-                const extendEnd   = direction.clone().multiplyScalar( extension);
+                const extendEnd   = direction.clone().multiplyScalar(extension);
 
                 const start = pI.clone().add(extendStart);
                 const end   = pJ.clone().add(extendEnd);
 
                 const lineGeo = new THREE.BufferGeometry().setFromPoints([start, end]);
 
-                const lineMat = new THREE.LineDashedMaterial({
-                    color: magnitude > 1.2 ? 0xff88ff : 0x00ffff,
-                    linewidth: 2,
-                    scale: 1,
-                    dashSize: 0.6 + magnitude * 0.3,
-                    gapSize: 0.8 + magnitude * 0.4,
+                // Vertex colors for animated flow
+                const positions = new Float32Array([
+                    start.x, start.y, start.z,
+                    end.x,   end.y,   end.z
+                ]);
+
+                const colors = new Float32Array(6); // 2 vertices × 3 (RGB)
+
+                lineGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                lineGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+                const lineMat = new THREE.LineBasicMaterial({
+                    vertexColors: true,
                     transparent: true,
-                    opacity: Math.min(0.95, magnitude * 0.35 + 0.4)
+                    opacity: 0.85 + magnitude * 0.1,
+                    linewidth: 1.5
                 });
 
                 const line = new THREE.Line(lineGeo, lineMat);
-                line.computeLineDistances();
                 line.userData.isTension = true;
+                line.userData.magnitude = magnitude;
                 scene.add(line);
+            });
+        }
+
+        function animateTensionFlow() {
+            time += 0.016;
+
+            scene.children.forEach(child => {
+                if (child.isLine && child.userData.isTension) {
+                    const mag = child.userData.magnitude || 1;
+                    const phase = time * flowSpeed + mag * 2; // slight offset per line
+
+                    const colors = child.geometry.attributes.color.array;
+
+                    // Wave from start to end
+                    const t = (Math.sin(phase) * 0.5 + 0.5); // 0 → 1 pulse
+
+                    // Cyan → bright white → cyan
+                    const baseColor = new THREE.Color(0x00ffff);
+                    const peakColor = new THREE.Color(0xffffff);
+
+                    const color = baseColor.clone().lerp(peakColor, t * 0.7);
+
+                    // Apply gradient along line
+                    colors[0] = color.r * 0.6; colors[1] = color.g * 0.6; colors[2] = color.b * 0.6; // dim start
+                    colors[3] = color.r;       colors[4] = color.g;       colors[5] = color.b;       // bright middle/end
+
+                    child.geometry.attributes.color.needsUpdate = true;
+                }
             });
         }
 
@@ -383,14 +419,9 @@
                 }
             }
 
-            // Animate tension flow
+            // Animate color flow on tension lines
             if (document.querySelector('input[name="mode"]:checked')?.value === 'tension') {
-                time += 0.016;
-                scene.children.forEach(child => {
-                    if (child.isLine && child.userData.isTension) {
-                        child.material.dashOffset = - (time * flowSpeed) % 2;
-                    }
-                });
+                animateTensionFlow();
             }
 
             controls.update();
