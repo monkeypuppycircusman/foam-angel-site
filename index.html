@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Foam Angel Interactive Model</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: sans-serif; background-color: #1a1a2e; color: #e0e0e0; display: flex; }
+        #controls-panel { width: 280px; padding: 20px; background-color: #16213e; height: 100vh; overflow-y: auto; box-shadow: 2px 0 5px rgba(0,0,0,0.5); }
+        #controls-panel h2 { margin-top: 0; color: #0f3460; }
+        .control-group { margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #0f3460; }
+        .control-group label { display: block; margin-bottom: 8px; font-weight: bold; }
+        .control-group input[type="range"], .control-group button, .control-group input[type="checkbox"] { width: calc(100% - 16px); padding: 8px; margin-bottom: 5px; background-color: #0f3460; color: #e0e0e0; border: 1px solid #0f3460; border-radius: 4px; cursor: pointer; }
+        .control-group input[type="range"] { margin-top: 5px; }
+        .control-group button { background-color: #e94560; border-color: #e94560; }
+        .control-group button:hover { background-color: #c43c52; }
+        .control-group input[type="checkbox"] { width: auto; margin-right: 8px; }
+        .mode-switch label { font-weight: normal; display: inline-block; margin-right: 15px;}
+        #explanation { flex-grow: 1; padding: 20px; }
+        #explanation h3 { color: #e94560; }
+        canvas { display: block; }
+        .info-section { margin-bottom: 15px; }
+        .info-section h4 { color: #0f3460; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+    <div id="controls-panel">
+        <h2>Foam Angel Controls</h2>
+
+        <div class="control-group">
+            <label for="rotationSlider">Rotation Speed</label>
+            <input type="range" id="rotationSlider" min="0" max="2" step="0.1" value="0.3">
+            <span id="rotationValue">0.3</span>
+            <p style="font-size: 0.8em;">0: Static | 1: Dynamic Symmetry | 2: High-Speed Envelope</p>
+        </div>
+
+        <div class="control-group">
+            <button id="perturbBtn">Apply Perturbation</button>
+            <p style="font-size: 0.8em;">Injects a small random disturbance.</p>
+        </div>
+
+        <div class="control-group">
+            <label>Steering Controls</label>
+            <div class="steering-toggles">
+                <label><input type="checkbox" id="stiffenA"> Stiffen Facet Group A</label><br>
+                <label><input type="checkbox" id="stiffenB"> Stiffen Facet Group B</label><br>
+                <label><input type="checkbox" id="stiffenC"> Stiffen Facet Group C</label>
+            </div>
+            <p style="font-size: 0.8em;">Increases stiffness, shifts tension, changes trajectory.</p>
+        </div>
+
+        <div class="control-group">
+            <label>Mode Visualization</label>
+            <div class="mode-switch">
+                <label><input type="radio" name="mode" value="stiffness" checked> Stiffness Spectrum</label>
+                <label><input type="radio" name="mode" value="tension"> Tension Routing</label><br>
+                <label><input type="radio" name="mode" value="eigenvalue"> Eigenvalue Stability</label>
+                <label><input type="radio" name="mode" value="envelope"> Dynamic Envelope</label>
+            </div>
+        </div>
+    </div>
+
+    <div id="explanation">
+        <div class="info-section">
+            <h3>Foam Angel Hyperfoil Model</h3>
+            <p>Explore the dynamic behavior of the Foam Angel hyperfoil. Interact with its geometry, stiffness, and tension routing to understand its unique properties.</p>
+        </div>
+        <!-- ... your existing info sections remain the same ... -->
+    </div>
+
+    <canvas id="simulationCanvas"></canvas>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.min.js"></script>
+
+    <script>
+        // --- Constants and Globals ---
+        const FACET_COUNT = 20; // Using icosahedron (20 faces) for now
+        let stiffnessValues = new Array(FACET_COUNT).fill(1.0);
+        let couplingMatrix = [];
+        let tensionGraph = {};
+        let rotationSpeed = 0.3;
+        let perturbationActive = false;
+        let groupA_facets = [0,1,2,3,4];  // Example grouping - adjust as needed
+        let groupB_facets = [5,6,7,8,9];
+        let groupC_facets = [10,11,12,13,14,15,16,17,18,19];
+        let mesh, controls;
+        let scene, camera, renderer;
+
+        // --- Three.js Setup ---
+        function initThreeJS(canvasId) {
+            const canvas = document.getElementById(canvasId);
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0f1623);
+
+            camera = new THREE.PerspectiveCamera(60, canvas.clientWidth / canvas.clientHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+            renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+
+            // Lights
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            dirLight.position.set(5, 8, 5);
+            scene.add(dirLight);
+
+            // Controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.minDistance = 2;
+            controls.maxDistance = 10;
+
+            camera.position.set(0, 0, 5);
+
+            // Geometry & Mesh
+            const geometry = new THREE.IcosahedronGeometry(1.8, 1); // visible polyhedron
+            geometry.computeVertexNormals();
+
+            const material = new THREE.MeshStandardMaterial({
+                vertexColors: true,
+                metalness: 0.1,
+                roughness: 0.7
+            });
+
+            mesh = new THREE.Mesh(geometry, material);
+            scene.add(mesh);
+
+            // Initial colors
+            updateFacetColors(stiffnessValues);
+        }
+
+        // --- Color Update ---
+        function updateFacetColors(values) {
+            const minVal = Math.min(...values);
+            const maxVal = Math.max(...values);
+            const range = maxVal - minVal || 1;
+
+            const colors = [];
+            values.forEach(val => {
+                const norm = (val - minVal) / range;
+                const hue = 0.6 - (norm * 0.6); // blue → red
+                const color = new THREE.Color().setHSL(hue, 1.0, 0.5);
+                colors.push(color.r, color.g, color.b);
+            });
+
+            mesh.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+        }
+
+        // --- Tension Lines (simple thin lines) ---
+        function updateTensionLines() {
+            // Remove old lines
+            scene.traverse(obj => {
+                if (obj.isLine && obj.userData.isTension) scene.remove(obj);
+            });
+
+            Object.entries(tensionGraph).forEach(([key, {magnitude}]) => {
+                const [i, j] = key.split('-').map(Number);
+                const pos = mesh.geometry.attributes.position.array;
+                const p1 = new THREE.Vector3(pos[i*3], pos[i*3+1], pos[i*3+2]);
+                const p2 = new THREE.Vector3(pos[j*3], pos[j*3+1], pos[j*3+2]);
+
+                const lineGeo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+                const lineMat = new THREE.LineBasicMaterial({
+                    color: magnitude > 1 ? 0xff4444 : 0x44aaff,
+                    transparent: true,
+                    opacity: Math.min(1, magnitude)
+                });
+                const line = new THREE.Line(lineGeo, lineMat);
+                line.userData.isTension = true;
+                scene.add(line);
+            });
+        }
+
+        // --- Stiffness & Coupling (simplified) ---
+        function initializeStiffnessAndCoupling() {
+            couplingMatrix = Array(FACET_COUNT).fill().map(() => Array(FACET_COUNT).fill(0));
+            // Simple nearest-neighbor coupling (for demo)
+            for (let i = 0; i < FACET_COUNT; i++) {
+                for (let j = i+1; j < FACET_COUNT; j++) {
+                    if (Math.abs(i - j) <= 3 || Math.abs(i - j) >= FACET_COUNT - 3) {
+                        couplingMatrix[i][j] = couplingMatrix[j][i] = 0.4;
+                    }
+                }
+            }
+        }
+
+        function computeEigenvalues() {
+            return stiffnessValues.map((s, i) => 
+                s + couplingMatrix[i].reduce((a, b) => a + b, 0) * 0.5
+            );
+        }
+
+        function stiffenGroup(groupId, amount = 0.4) {
+            const group = groupId === 'A' ? groupA_facets : groupId === 'B' ? groupB_facets : groupC_facets;
+            group.forEach(i => {
+                stiffnessValues[i] = Math.min(3.0, stiffnessValues[i] + amount);
+            });
+        }
+
+        function applyPerturbation() {
+            stiffnessValues = stiffnessValues.map(v => 
+                Math.max(0.5, Math.min(3.0, v + (Math.random() - 0.5) * 0.6))
+            );
+            perturbationActive = true;
+            setTimeout(() => { perturbationActive = false; }, 1500);
+        }
+
+        // --- UI Listeners ---
+        function initUIListeners() {
+            document.getElementById('rotationSlider').addEventListener('input', e => {
+                rotationSpeed = +e.target.value;
+                document.getElementById('rotationValue').textContent = rotationSpeed.toFixed(1);
+            });
+
+            document.getElementById('perturbBtn').addEventListener('click', () => {
+                applyPerturbation();
+                updateState();
+            });
+
+            ['A','B','C'].forEach(id => {
+                document.getElementById(`stiffen${id}`).addEventListener('change', e => {
+                    if (e.target.checked) stiffenGroup(id);
+                    else stiffnessValues = new Array(FACET_COUNT).fill(1.0); // reset for simplicity
+                    updateState();
+                });
+            });
+
+            document.querySelectorAll('input[name="mode"]').forEach(r => {
+                r.addEventListener('change', () => updateState());
+            });
+
+            window.addEventListener('resize', () => {
+                const w = window.innerWidth - 320; // approx panel width
+                const h = window.innerHeight;
+                renderer.setSize(w, h);
+                camera.aspect = w / h;
+                camera.updateProjectionMatrix();
+            });
+        }
+
+        function updateState() {
+            const ev = computeEigenvalues();
+            updateFacetColors(ev);
+
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            if (mode === 'tension') {
+                // Fake some tension for demo
+                tensionGraph = {};
+                for (let i = 0; i < FACET_COUNT; i += 2) {
+                    const j = (i + 3) % FACET_COUNT;
+                    tensionGraph[`${i}-${j}`] = { magnitude: Math.abs(ev[i] - ev[j]) * 2 };
+                }
+                updateTensionLines();
+            } else {
+                // Clear tension lines
+                scene.traverse(obj => { if (obj.isLine && obj.userData.isTension) scene.remove(obj); });
+            }
+        }
+
+        // --- Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+            if (mesh) mesh.rotation.y += rotationSpeed * 0.005;
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // --- Start ---
+        function main() {
+            initializeStiffnessAndCoupling();
+            initThreeJS('simulationCanvas');
+            initUIListeners();
+            updateState();
+            animate();
+        }
+
+        window.onload = main;
+    </script>
+</body>
+</html>
