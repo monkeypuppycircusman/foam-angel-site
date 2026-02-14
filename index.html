@@ -317,20 +317,21 @@
         }
 
         function createStreamlines() {
-            // Remove old streamlines
             streamlines.forEach(s => scene.remove(s));
             streamlines = [];
 
-            const numLines = 28;
-            const radius = 5.0;
-            const segments = 80;
+            const numLines = 32;
+            const startPlaneDist = 12;
+            const segments = 100;
 
             for (let i = 0; i < numLines; i++) {
-                const angle = (i / numLines) * Math.PI * 2 + time * 0.1;
+                const angle = (i / numLines) * Math.PI * 2;
+                const spread = 4 + Math.sin(angle * 3) * 1.5;
+
                 const start = new THREE.Vector3(
-                    Math.cos(angle) * radius,
-                    Math.sin(angle) * radius * 0.4,
-                    -10
+                    Math.cos(angle) * spread,
+                    Math.sin(angle) * spread * 0.6,
+                    -startPlaneDist
                 );
 
                 const points = [];
@@ -338,23 +339,53 @@
 
                 for (let s = 0; s < segments; s++) {
                     const t = s / (segments - 1);
-                    const bend = Math.sin(t * Math.PI * 4 + time * 1.2) * 0.6 * (1 - t * 0.7);
-                    current.x += 0.25 + bend * Math.cos(angle);
-                    current.y += bend * 0.3;
-                    current.z += 0.35;
 
-                    const toCenter = mesh.position.clone().sub(current).normalize().multiplyScalar(0.18 * (1 - t));
-                    current.add(toCenter);
+                    // Compress toward model front
+                    const attract = mesh.position.clone().sub(current).normalize().multiplyScalar(0.35 * (1 - t * 0.7));
+                    current.add(attract);
+
+                    // Bend around surface
+                    const distToMesh = current.distanceTo(mesh.position);
+                    const bendStrength = 1.4 * Math.exp(-distToMesh * 0.5);
+                    const bend = new THREE.Vector3(
+                        Math.sin(t * Math.PI * 6 + time * 1.2) * bendStrength * 0.35,
+                        Math.cos(t * Math.PI * 4 + time * 0.9) * bendStrength * 0.25,
+                        0
+                    );
+                    current.add(bend);
+
+                    // Wake divergence
+                    if (t > 0.55) {
+                        current.x += current.x * 0.12 * (t - 0.55);
+                        current.y += current.y * 0.08 * (t - 0.55);
+                        current.z += 0.05 * (t - 0.55);
+                    }
+
+                    current.z += 0.28;
 
                     points.push(current.clone());
                 }
 
                 const geo = new THREE.BufferGeometry().setFromPoints(points);
+
+                const colors = [];
+                for (let k = 0; k < points.length; k++) {
+                    const tt = k / (points.length - 1);
+                    const col = new THREE.Color();
+                    if (tt < 0.35) col.setHSL(0.58, 0.9, 0.55);        // deep cyan incoming
+                    else if (tt < 0.65) col.setHSL(0.52, 1.0, 0.75);    // bright acceleration near surface
+                    else col.setHSL(0.55, 0.7, 0.45 + tt * 0.15);       // fade pale in wake
+
+                    colors.push(col.r, col.g, col.b);
+                }
+
+                geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
                 const mat = new THREE.LineBasicMaterial({
-                    color: 0x88ffff,
+                    vertexColors: true,
                     transparent: true,
-                    opacity: 0.4 + 0.15 * Math.sin(time * 3 + i * 2),
-                    linewidth: 1.2
+                    opacity: 0.45,
+                    linewidth: 1.4
                 });
 
                 const line = new THREE.Line(geo, mat);
@@ -430,17 +461,15 @@
                 }
             }
 
-            // Fluid dynamics visualization (streamlines + wake) in envelope or high speed
             const currentMode = document.querySelector('input[name="mode"]:checked')?.value;
-            if (rotationSpeed >= 4 || currentMode === 'envelope') {
+            if (rotationSpeed >= 3.5 || currentMode === 'envelope') {
                 wakeTime += 0.016;
-                if (wakeTime > 3 || streamlines.length === 0) {
+                if (wakeTime > 4 || streamlines.length === 0) {
                     createStreamlines();
                     wakeTime = 0;
                 }
-                // Gentle pulse on opacity for flow feel
                 streamlines.forEach((line, idx) => {
-                    line.material.opacity = 0.35 + 0.15 * Math.sin(time * 4 + idx * 1.5);
+                    line.material.opacity = 0.42 + 0.16 * Math.sin(time * 3 + idx * 1.4);
                 });
             } else {
                 streamlines.forEach(s => scene.remove(s));
@@ -465,4 +494,3 @@
     </script>
 </body>
 </html>
-    </script>
