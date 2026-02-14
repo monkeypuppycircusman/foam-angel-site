@@ -170,11 +170,12 @@
         let groupB_facets = [5,6,7,8,9];
         let groupC_facets = [10,11,12,13,14,15,16,17,18,19];
         let mesh, controls, scene, camera, renderer;
+        let time = 0;
+        const flowSpeed = 4.5;          // tune flow speed (higher = faster dashes movement)
 
         function initThreeJS() {
             scene = new THREE.Scene();
 
-            // Space background + fog
             scene.background = new THREE.Color(0x000011);
             scene.fog = new THREE.FogExp2(0x000022, 0.0007);
 
@@ -184,7 +185,6 @@
                 scene.background = texture;
             });
 
-            // Simple distant starfield
             const starsGeometry = new THREE.BufferGeometry();
             const starsCount = 4000;
             const posArray = new Float32Array(starsCount * 3);
@@ -279,18 +279,41 @@
 
         function updateTensionLines() {
             scene.children.forEach(child => {
-                if (child.isLine && child.userData.isTension) scene.remove(child);
+                if (child.isLine && child.userData.isTension) {
+                    scene.remove(child);
+                }
             });
 
             Object.entries(tensionGraph).forEach(([key, {magnitude}]) => {
                 const [i, j] = key.split('-').map(Number);
-                const pos = mesh.geometry.attributes.position.array;
-                const p1 = new THREE.Vector3(pos[i*3], pos[i*3+1], pos[i*3+2]);
-                const p2 = new THREE.Vector3(pos[j*3], pos[j*3+1], pos[j*3+2]);
 
-                const lineGeo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-                const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: Math.min(1, magnitude * 0.5) });
+                const pos = mesh.geometry.attributes.position.array;
+                const pI = new THREE.Vector3(pos[i*3], pos[i*3+1], pos[i*3+2]);
+                const pJ = new THREE.Vector3(pos[j*3], pos[j*3+1], pos[j*3+2]);
+
+                const direction = new THREE.Vector3().subVectors(pJ, pI).normalize();
+
+                const extension = 1.8;
+                const extendStart = direction.clone().multiplyScalar(-extension);
+                const extendEnd   = direction.clone().multiplyScalar( extension);
+
+                const start = pI.clone().add(extendStart);
+                const end   = pJ.clone().add(extendEnd);
+
+                const lineGeo = new THREE.BufferGeometry().setFromPoints([start, end]);
+
+                const lineMat = new THREE.LineDashedMaterial({
+                    color: magnitude > 1.2 ? 0xff88ff : 0x00ffff,
+                    linewidth: 2,
+                    scale: 1,
+                    dashSize: 0.6 + magnitude * 0.3,
+                    gapSize: 0.8 + magnitude * 0.4,
+                    transparent: true,
+                    opacity: Math.min(0.95, magnitude * 0.35 + 0.4)
+                });
+
                 const line = new THREE.Line(lineGeo, lineMat);
+                line.computeLineDistances();
                 line.userData.isTension = true;
                 scene.add(line);
             });
@@ -349,10 +372,8 @@
             requestAnimationFrame(animate);
 
             if (mesh) {
-                // Super-fast at high slider values (8–10)
                 mesh.rotation.y += rotationSpeed * 0.018;
 
-                // Optional pulse at very high speed
                 const factor = Math.min(rotationSpeed / 10, 1);
                 if (factor > 0.7) {
                     const pulse = Math.sin(Date.now() * 0.015) * 0.1 * factor;
@@ -360,6 +381,16 @@
                 } else {
                     mesh.scale.setScalar(1);
                 }
+            }
+
+            // Animate tension flow
+            if (document.querySelector('input[name="mode"]:checked')?.value === 'tension') {
+                time += 0.016;
+                scene.children.forEach(child => {
+                    if (child.isLine && child.userData.isTension) {
+                        child.material.dashOffset = - (time * flowSpeed) % 2;
+                    }
+                });
             }
 
             controls.update();
