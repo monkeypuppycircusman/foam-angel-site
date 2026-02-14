@@ -320,78 +320,80 @@
             streamlines.forEach(s => scene.remove(s));
             streamlines = [];
 
-            const numLines = 32;
-            const startPlaneDist = 12;
-            const segments = 100;
+            const numLines = 36;
+            const startPlaneDist = 14;
+            const segments = 120;
 
-            for (let i = 0; i < numLines; i++) {
-                const angle = (i / numLines) * Math.PI * 2;
-                const spread = 4 + Math.sin(angle * 3) * 1.5;
+            // Create a grid-like start points in front (more uniform oncoming flow)
+            for (let row = -3; row <= 3; row++) {
+                for (let col = -5; col <= 5; col++) {
+                    if (Math.abs(row) + Math.abs(col) > 7) continue; // rough circle
 
-                const start = new THREE.Vector3(
-                    Math.cos(angle) * spread,
-                    Math.sin(angle) * spread * 0.6,
-                    -startPlaneDist
-                );
+                    const x = col * 1.8;
+                    const y = row * 1.4;
+                    const start = new THREE.Vector3(x, y, -startPlaneDist);
 
-                const points = [];
-                let current = start.clone();
+                    const points = [];
+                    let current = start.clone();
 
-                for (let s = 0; s < segments; s++) {
-                    const t = s / (segments - 1);
+                    for (let s = 0; s < segments; s++) {
+                        const t = s / (segments - 1);
 
-                    // Compress toward model front
-                    const attract = mesh.position.clone().sub(current).normalize().multiplyScalar(0.35 * (1 - t * 0.7));
-                    current.add(attract);
+                        // Stronger attraction to surface in front half
+                        const attractStrength = 0.45 * (1 - t * 0.6);
+                        const toMesh = mesh.position.clone().sub(current).normalize().multiplyScalar(attractStrength);
+                        current.add(toMesh);
 
-                    // Bend around surface
-                    const distToMesh = current.distanceTo(mesh.position);
-                    const bendStrength = 1.4 * Math.exp(-distToMesh * 0.5);
-                    const bend = new THREE.Vector3(
-                        Math.sin(t * Math.PI * 6 + time * 1.2) * bendStrength * 0.35,
-                        Math.cos(t * Math.PI * 4 + time * 0.9) * bendStrength * 0.25,
-                        0
-                    );
-                    current.add(bend);
+                        // Edge separation: stronger bend near surface
+                        const distToMesh = current.distanceTo(mesh.position);
+                        const separation = 1.8 * Math.exp(-distToMesh * 0.8) * (1 - t * 0.5);
 
-                    // Wake divergence
-                    if (t > 0.55) {
-                        current.x += current.x * 0.12 * (t - 0.55);
-                        current.y += current.y * 0.08 * (t - 0.55);
-                        current.z += 0.05 * (t - 0.55);
+                        // Add tangential deflection (fake edge effect)
+                        const tangentBend = new THREE.Vector3(
+                            Math.cos(time * 1.5 + row * 2 + col) * separation * 0.5,
+                            Math.sin(time * 1.2 + row * 1.5 + col) * separation * 0.4,
+                            0
+                        );
+                        current.add(tangentBend);
+
+                        // Wake expansion
+                        if (t > 0.5) {
+                            current.x += (current.x - mesh.position.x) * 0.15 * (t - 0.5);
+                            current.y += (current.y - mesh.position.y) * 0.10 * (t - 0.5);
+                        }
+
+                        current.z += 0.32;
+
+                        points.push(current.clone());
                     }
 
-                    current.z += 0.28;
+                    const geo = new THREE.BufferGeometry().setFromPoints(points);
 
-                    points.push(current.clone());
+                    const colors = [];
+                    for (let k = 0; k < points.length; k++) {
+                        const tt = k / (points.length - 1);
+                        const col = new THREE.Color();
+                        if (tt < 0.3) col.setHSL(0.60, 0.85, 0.50);     // cold incoming
+                        else if (tt < 0.6) col.setHSL(0.55, 1.0, 0.70);  // acceleration blue-cyan
+                        else col.setHSL(0.50, 0.65, 0.40 + tt * 0.2);    // warm fade in wake
+
+                        colors.push(col.r, col.g, col.b);
+                    }
+
+                    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+                    const mat = new THREE.LineBasicMaterial({
+                        vertexColors: true,
+                        transparent: true,
+                        opacity: 0.48,
+                        linewidth: 1.5
+                    });
+
+                    const line = new THREE.Line(geo, mat);
+                    line.userData.isStreamline = true;
+                    scene.add(line);
+                    streamlines.push(line);
                 }
-
-                const geo = new THREE.BufferGeometry().setFromPoints(points);
-
-                const colors = [];
-                for (let k = 0; k < points.length; k++) {
-                    const tt = k / (points.length - 1);
-                    const col = new THREE.Color();
-                    if (tt < 0.35) col.setHSL(0.58, 0.9, 0.55);        // deep cyan incoming
-                    else if (tt < 0.65) col.setHSL(0.52, 1.0, 0.75);    // bright acceleration near surface
-                    else col.setHSL(0.55, 0.7, 0.45 + tt * 0.15);       // fade pale in wake
-
-                    colors.push(col.r, col.g, col.b);
-                }
-
-                geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-
-                const mat = new THREE.LineBasicMaterial({
-                    vertexColors: true,
-                    transparent: true,
-                    opacity: 0.45,
-                    linewidth: 1.4
-                });
-
-                const line = new THREE.Line(geo, mat);
-                line.userData.isStreamline = true;
-                scene.add(line);
-                streamlines.push(line);
             }
         }
 
@@ -464,12 +466,12 @@
             const currentMode = document.querySelector('input[name="mode"]:checked')?.value;
             if (rotationSpeed >= 3.5 || currentMode === 'envelope') {
                 wakeTime += 0.016;
-                if (wakeTime > 4 || streamlines.length === 0) {
+                if (wakeTime > 3.5 || streamlines.length === 0) {
                     createStreamlines();
                     wakeTime = 0;
                 }
                 streamlines.forEach((line, idx) => {
-                    line.material.opacity = 0.42 + 0.16 * Math.sin(time * 3 + idx * 1.4);
+                    line.material.opacity = 0.45 + 0.18 * Math.sin(time * 3.5 + idx * 1.8);
                 });
             } else {
                 streamlines.forEach(s => scene.remove(s));
